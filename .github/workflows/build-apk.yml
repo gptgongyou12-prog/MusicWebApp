@@ -9,6 +9,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -23,16 +25,14 @@ jobs:
 
       - run: gradle assembleRelease
 
-      - name: Upload APK
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: music-app
           path: app/build/outputs/apk/release/*.apk
 
-      - name: Attach to Release
+      - name: Attach APK to Release
         if: github.event_name == 'release'
-        run: |
-          APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
-          gh release upload ${{ github.ref_name }} "$APK" --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/release/*.apk
