@@ -72,6 +72,12 @@ class MusicService : Service() {
         }
     }
 
+    private var customIcon: Bitmap? = null
+
+    fun setCustomIcon(bmp: Bitmap) {
+        customIcon = bmp
+    }
+
     fun updateMetadata(title: String, artist: String, isPlaying: Boolean) {
         mediaSession.setMetadata(
             MediaMetadataCompat.Builder()
@@ -106,7 +112,7 @@ class MusicService : Service() {
             .setContentTitle(title.ifEmpty { "재생 중" })
             .setContentText(artist)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setLargeIcon(makeColorIcon())
+            .setLargeIcon(customIcon ?: makeColorIcon())
             .setContentIntent(pendingIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(true)

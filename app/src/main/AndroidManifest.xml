@@ -7,6 +7,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
 
     <application
         android:allowBackup="false"
@@ -19,21 +20,17 @@
             android:name=".MainActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:windowSoftInputMode="adjustResize" />
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
 
         <service
             android:name=".MusicService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
-
-        <activity-alias android:name=".Alias_music"    android:targetActivity=".MainActivity" android:label="@string/alias_music"   android:icon="@mipmap/ic_music"   android:enabled="true"  android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity-alias>
-        <activity-alias android:name=".Alias_melon"    android:targetActivity=".MainActivity" android:label="@string/alias_melon"   android:icon="@mipmap/ic_melon"   android:enabled="false" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity-alias>
-        <activity-alias android:name=".Alias_genie"    android:targetActivity=".MainActivity" android:label="@string/alias_genie"   android:icon="@mipmap/ic_genie"   android:enabled="false" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity-alias>
-        <activity-alias android:name=".Alias_bugs"     android:targetActivity=".MainActivity" android:label="@string/alias_bugs"    android:icon="@mipmap/ic_bugs"    android:enabled="false" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity-alias>
-        <activity-alias android:name=".Alias_flo"      android:targetActivity=".MainActivity" android:label="@string/alias_flo"     android:icon="@mipmap/ic_flo"     android:enabled="false" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity-alias>
-        <activity-alias android:name=".Alias_vibe"     android:targetActivity=".MainActivity" android:label="@string/alias_vibe"    android:icon="@mipmap/ic_vibe"    android:enabled="false" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity-alias>
-        <activity-alias android:name=".Alias_spotify"  android:targetActivity=".MainActivity" android:label="@string/alias_spotify" android:icon="@mipmap/ic_spotify" android:enabled="false" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity-alias>
-        <activity-alias android:name=".Alias_ytmusic"  android:targetActivity=".MainActivity" android:label="@string/alias_ytmusic" android:icon="@mipmap/ic_ytmusic" android:enabled="false" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity-alias>
 
     </application>
 
