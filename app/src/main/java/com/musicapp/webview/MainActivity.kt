@@ -3,29 +3,21 @@ package com.musicapp.webview
 import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.Context
-import android.content.SharedPreferences
 import android.graphics.Color
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.os.PowerManager
 import android.view.KeyEvent
 import android.view.View
-import android.view.WindowInsets
-import android.view.WindowInsetsController
 import android.webkit.*
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.view.WindowCompat
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var webView: WebView
-    private lateinit var prefs: SharedPreferences
-    private var wakeLock: PowerManager.WakeLock? = null
-    private var lockedBaseUrl: String = ""
+    private var webView: WebView? = null
+    private var lockedBaseUrl = ""
 
     companion object {
         private const val PREF_NAME = "app_config"
@@ -35,30 +27,20 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        prefs = getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-        lockedBaseUrl = prefs.getString(KEY_BASE_URL, "") ?: ""
+        hideSystemUI()
 
-        setupFullscreen()
+        val prefs = getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        lockedBaseUrl = prefs.getString(KEY_BASE_URL, "") ?: ""
 
         if (lockedBaseUrl.isEmpty()) {
             showUrlSetupDialog()
         } else {
-            initWebView(lockedBaseUrl)
+            loadWebView(lockedBaseUrl)
         }
     }
 
-    private fun setupFullscreen() {
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        window.statusBarColor = Color.TRANSPARENT
-        window.navigationBarColor = Color.TRANSPARENT
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.insetsController?.let {
-                it.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
-                it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            }
-        } else {
-            @Suppress("DEPRECATION")
+    private fun hideSystemUI() {
+        try {
             window.decorView.systemUiVisibility = (
                 View.SYSTEM_UI_FLAG_FULLSCREEN
                 or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
@@ -66,7 +48,7 @@ class MainActivity : AppCompatActivity() {
                 or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                 or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
             )
-        }
+        } catch (e: Exception) { /* ignore */ }
     }
 
     private fun showUrlSetupDialog() {
@@ -74,10 +56,8 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(60, 40, 60, 20)
         }
-
         val input = EditText(this).apply {
             hint = "https://example.com"
-            inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
             setText("https://")
         }
         layout.addView(input)
@@ -90,11 +70,12 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("확인") { _, _ ->
                 val url = input.text.toString().trim()
                 if (url.startsWith("http://") || url.startsWith("https://")) {
-                    prefs.edit().putString(KEY_BASE_URL, url).apply()
+                    getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                        .edit().putString(KEY_BASE_URL, url).apply()
                     lockedBaseUrl = url
-                    initWebView(url)
+                    loadWebView(url)
                 } else {
-                    Toast.makeText(this, "올바른 URL을 입력하세요 (https://...)", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "https:// 로 시작하는 URL을 입력하세요", Toast.LENGTH_LONG).show()
                     showUrlSetupDialog()
                 }
             }
@@ -102,80 +83,56 @@ class MainActivity : AppCompatActivity() {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun initWebView(url: String) {
-        webView = WebView(this).apply {
-            setBackgroundColor(Color.BLACK)
-        }
-        setContentView(webView)
+    private fun loadWebView(url: String) {
+        val wv = WebView(this)
+        webView = wv
+        wv.setBackgroundColor(Color.BLACK)
+        setContentView(wv)
 
-        acquireWakeLock()
-
-        webView.settings.apply {
+        wv.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            databaseEnabled = true
             mediaPlaybackRequiresUserGesture = false
-            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             cacheMode = WebSettings.LOAD_DEFAULT
-            allowFileAccess = true
-            allowContentAccess = true
+            useWideViewPort = true
+            loadWithOverviewMode = true
             setSupportZoom(false)
             builtInZoomControls = false
             displayZoomControls = false
-            useWideViewPort = true
-            loadWithOverviewMode = true
-            javaScriptCanOpenWindowsAutomatically = true
-            setSupportMultipleWindows(false)
-            userAgentString = buildUserAgent()
+            // UserAgent에서 wv 태그 제거 (일부 사이트 제한 우회)
+            userAgentString = userAgentString?.replace(Regex("\\bwv\\b"), "")?.trim()
         }
 
-        webView.webViewClient = object : WebViewClient() {
+        wv.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                val requestUrl = request.url.toString()
-                return if (isAllowedUrl(requestUrl)) {
-                    false
-                } else {
-                    true
-                }
+                val host = Uri.parse(request.url.toString()).host ?: return true
+                val baseHost = Uri.parse(lockedBaseUrl).host ?: return true
+                return !(host == baseHost || host.endsWith(".$baseHost"))
             }
 
             override fun onPageFinished(view: WebView, url: String) {
-                super.onPageFinished(view, url)
-                injectAppStyles()
-            }
-
-            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (request.isForMainFrame) {
-                    val errorHtml = """
-                        <html><body style="background:#111;color:#aaa;font-family:sans-serif;
-                        display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column;">
-                        <p style="font-size:18px;">연결할 수 없습니다</p>
-                        <p style="font-size:13px;opacity:.6;">네트워크를 확인해 주세요</p>
-                        <button onclick="location.reload()" style="margin-top:20px;padding:10px 24px;
-                        background:#333;color:#fff;border:none;border-radius:8px;font-size:15px;">다시 시도</button>
-                        </body></html>
-                    """.trimIndent()
-                    view.loadData(errorHtml, "text/html", "UTF-8")
-                }
+                // 스크롤바 숨김, 텍스트 선택 방지
+                view.evaluateJavascript(
+                    "(function(){var s=document.createElement('style');" +
+                    "s.textContent='::-webkit-scrollbar{display:none!important}" +
+                    "body{-webkit-tap-highlight-color:transparent}';" +
+                    "document.head&&document.head.appendChild(s);})()", null)
             }
         }
 
-        webView.webChromeClient = object : WebChromeClient() {
+        wv.webChromeClient = object : WebChromeClient() {
             private var customView: View? = null
-            private var customViewCallback: CustomViewCallback? = null
 
             override fun onShowCustomView(view: View, callback: CustomViewCallback) {
                 customView = view
-                customViewCallback = callback
                 setContentView(view)
-                setupFullscreen()
+                hideSystemUI()
             }
 
             override fun onHideCustomView() {
-                customViewCallback?.onCustomViewHidden()
                 customView = null
-                setContentView(webView)
-                setupFullscreen()
+                setContentView(wv)
+                hideSystemUI()
             }
 
             override fun onPermissionRequest(request: PermissionRequest) {
@@ -183,72 +140,29 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        webView.loadUrl(url)
-    }
-
-    private fun isAllowedUrl(url: String): Boolean {
-        return try {
-            val baseHost = Uri.parse(lockedBaseUrl).host ?: return false
-            val requestHost = Uri.parse(url).host ?: return false
-            requestHost == baseHost || requestHost.endsWith(".$baseHost")
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    private fun injectAppStyles() {
-        val js = """
-            (function() {
-                var style = document.createElement('style');
-                style.textContent = '::-webkit-scrollbar{display:none!important}' +
-                    'body{-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;}' +
-                    'input,textarea,select{-webkit-user-select:auto!important;user-select:auto!important;}';
-                document.head && document.head.appendChild(style);
-            })();
-        """.trimIndent()
-        webView.evaluateJavascript(js, null)
-    }
-
-    private fun buildUserAgent(): String {
-        val base = WebSettings.getDefaultUserAgent(this)
-        return base.replace("wv", "").replace("  ", " ").trim()
-    }
-
-    private fun acquireWakeLock() {
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        @Suppress("DEPRECATION")
-        wakeLock = pm.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
-            "MusicApp::AudioWakeLock"
-        ).apply { acquire(12 * 60 * 60 * 1000L) }
+        wv.loadUrl(url)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_BACK && ::webView.isInitialized) {
-            if (webView.canGoBack()) {
-                webView.goBack()
-                return true
-            }
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            webView?.let { if (it.canGoBack()) { it.goBack(); return true } }
         }
         return super.onKeyDown(keyCode, event)
     }
 
     override fun onResume() {
         super.onResume()
-        if (::webView.isInitialized) webView.onResume()
-        setupFullscreen()
+        webView?.onResume()
+        hideSystemUI()
     }
 
     override fun onPause() {
         super.onPause()
-        if (::webView.isInitialized) webView.onPause()
+        webView?.onPause()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        wakeLock?.release()
-        if (::webView.isInitialized) {
-            webView.destroy()
-        }
+        webView?.destroy()
     }
 }
