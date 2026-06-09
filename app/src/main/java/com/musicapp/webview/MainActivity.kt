@@ -105,9 +105,7 @@ class MainActivity : AppCompatActivity() {
 
         wv.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                val host = Uri.parse(request.url.toString()).host ?: return true
-                val baseHost = Uri.parse(lockedBaseUrl).host ?: return true
-                return !(host == baseHost || host.endsWith(".$baseHost"))
+                return false // 모든 URL 허용
             }
 
             override fun onPageFinished(view: WebView, url: String) {
