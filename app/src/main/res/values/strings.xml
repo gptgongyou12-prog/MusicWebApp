@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Music</string>
+    <string name="alias_music">Music</string>
+    <string name="alias_melon">Melon</string>
+    <string name="alias_genie">지니</string>
+    <string name="alias_bugs">벅스</string>
+    <string name="alias_flo">FLO</string>
+    <string name="alias_vibe">VIBE</string>
+    <string name="alias_spotify">Spotify</string>
+    <string name="alias_ytmusic">YT Music</string>
 </resources>
