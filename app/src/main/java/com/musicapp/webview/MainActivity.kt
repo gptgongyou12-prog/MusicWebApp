@@ -1,14 +1,11 @@
 package com.musicapp.webview
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.*
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
@@ -19,7 +16,6 @@ import android.webkit.*
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
 import java.io.File
 import java.io.FileOutputStream
 
@@ -30,6 +26,8 @@ class MainActivity : AppCompatActivity() {
     private var musicService: MusicService? = null
     private var serviceBound = false
     private var pendingIconBitmap: Bitmap? = null
+    private var iconPreviewView: ImageView? = null
+    private var iconHintView: TextView? = null
 
     companion object {
         const val PREF_NAME = "app_config"
@@ -37,16 +35,64 @@ class MainActivity : AppCompatActivity() {
         const val ICON_FILE = "user_icon.png"
     }
 
+    // 알림 버튼 브로드캐스트 수신
+    private val mediaReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                "MUSIC_PLAYPAUSE" -> webView?.evaluateJavascript("""
+                    (function(){
+                        var a=document.querySelector('audio')||document.querySelector('video');
+                        if(a){if(a.paused)a.play();else a.pause();}
+                    })();""", null)
+                "MUSIC_NEXT" -> webView?.evaluateJavascript("""
+                    (function(){
+                        var btns=Array.from(document.querySelectorAll('button,div[role=button]'));
+                        var next=btns.find(function(b){var t=(b.getAttribute('aria-label')||b.title||b.innerText||'').toLowerCase();
+                            return t.includes('next')||t.includes('다음')||t.includes('skip');});
+                        if(next)next.click();
+                    })();""", null)
+                "MUSIC_PREV" -> webView?.evaluateJavascript("""
+                    (function(){
+                        var btns=Array.from(document.querySelectorAll('button,div[role=button]'));
+                        var prev=btns.find(function(b){var t=(b.getAttribute('aria-label')||b.title||b.innerText||'').toLowerCase();
+                            return t.includes('prev')||t.includes('previous')||t.includes('이전');});
+                        if(prev)prev.click();
+                    })();""", null)
+            }
+        }
+    }
+
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             musicService = (binder as MusicService.LocalBinder).getService()
             serviceBound = true
             loadSavedIcon()?.let { musicService?.setCustomIcon(it) }
+            musicService?.setPlaybackController(object : MusicService.PlaybackController {
+                override fun onPlay() {
+                    webView?.evaluateJavascript(
+                        "var a=document.querySelector('audio')||document.querySelector('video');if(a)a.play();", null)
+                }
+                override fun onPause() {
+                    webView?.evaluateJavascript(
+                        "var a=document.querySelector('audio')||document.querySelector('video');if(a)a.pause();", null)
+                }
+                override fun onSkipNext() {
+                    webView?.evaluateJavascript("""
+                        var btns=Array.from(document.querySelectorAll('button,div[role=button]'));
+                        var b=btns.find(function(x){var t=(x.getAttribute('aria-label')||x.title||'').toLowerCase();
+                            return t.includes('next')||t.includes('다음');});if(b)b.click();""", null)
+                }
+                override fun onSkipPrevious() {
+                    webView?.evaluateJavascript("""
+                        var btns=Array.from(document.querySelectorAll('button,div[role=button]'));
+                        var b=btns.find(function(x){var t=(x.getAttribute('aria-label')||x.title||'').toLowerCase();
+                            return t.includes('prev')||t.includes('이전');});if(b)b.click();""", null)
+                }
+            })
         }
         override fun onServiceDisconnected(name: ComponentName) { serviceBound = false }
     }
 
-    // 이미지 피커
     private val pickImage = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri ?: return@registerForActivityResult
         try {
@@ -58,32 +104,37 @@ class MainActivity : AppCompatActivity() {
                 @Suppress("DEPRECATION")
                 MediaStore.Images.Media.getBitmap(contentResolver, uri)
             }
-            val square = cropToSquare(bmp)
+            val square = cropSquare(bmp)
             pendingIconBitmap = square
             iconPreviewView?.setImageBitmap(square)
             iconPreviewView?.visibility = View.VISIBLE
-            iconHintView?.text = "✓ 이미지 선택됨"
+            iconHintView?.text = "✓ 선택됨"
         } catch (e: Exception) {
             Toast.makeText(this, "이미지를 불러올 수 없습니다", Toast.LENGTH_SHORT).show()
         }
     }
 
-    private var iconPreviewView: ImageView? = null
-    private var iconHintView: TextView? = null
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         hideSystemUI()
 
+        // 알림 버튼 수신 등록
+        val filter = IntentFilter().apply {
+            addAction("MUSIC_PLAYPAUSE")
+            addAction("MUSIC_NEXT")
+            addAction("MUSIC_PREV")
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(mediaReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(mediaReceiver, filter)
+        }
+
         val prefs = getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
         lockedBaseUrl = prefs.getString(KEY_BASE_URL, "") ?: ""
 
-        if (lockedBaseUrl.isEmpty()) {
-            showSetupDialog(prefs)
-        } else {
-            startMusicService()
-            loadWebView(lockedBaseUrl)
-        }
+        if (lockedBaseUrl.isEmpty()) showSetupDialog(prefs)
+        else { startMusicService(); loadWebView(lockedBaseUrl) }
     }
 
     private fun showSetupDialog(prefs: SharedPreferences) {
@@ -92,133 +143,78 @@ class MainActivity : AppCompatActivity() {
             setPadding(64, 40, 64, 16)
         }
 
-        // URL 입력
-        TextView(this).apply {
-            text = "웹 주소"
-            setTextColor(0xFFCCCCCC.toInt())
-            textSize = 13f
-        }.also { layout.addView(it) }
-
+        layout.addView(TextView(this).apply { text = "웹 주소"; setTextColor(0xFFCCCCCC.toInt()); textSize = 13f })
         val urlInput = EditText(this).apply {
             hint = "https://example.com"
             setText("https://")
             setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
-            inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI or android.text.InputType.TYPE_CLASS_TEXT
         }
         layout.addView(urlInput)
 
-        // 구분선
-        View(this).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1).also {
-                it.topMargin = 24; it.bottomMargin = 16
-            }
+        layout.addView(View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1).also { it.topMargin = 24; it.bottomMargin = 16 }
             setBackgroundColor(0xFF333333.toInt())
-        }.also { layout.addView(it) }
+        })
 
-        // 앱 아이콘 업로드
-        TextView(this).apply {
-            text = "앱 알림 아이콘 (선택)"
-            setTextColor(0xFFCCCCCC.toInt())
-            textSize = 13f
-        }.also { layout.addView(it) }
+        layout.addView(TextView(this).apply { text = "알림 아이콘 (선택)"; setTextColor(0xFFCCCCCC.toInt()); textSize = 13f })
 
-        val iconRow = LinearLayout(this).apply {
+        val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { it.topMargin = 8 }
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = 8 }
         }
-
         iconPreviewView = ImageView(this).apply {
             layoutParams = LinearLayout.LayoutParams(80, 80).also { it.rightMargin = 16 }
             scaleType = ImageView.ScaleType.CENTER_CROP
             setBackgroundColor(0xFF222222.toInt())
             visibility = View.GONE
         }
-
         iconHintView = TextView(this).apply {
-            text = "사진을 선택하면\n알림창에 표시됩니다"
+            text = "선택한 사진이 알림창에 표시됩니다"
             setTextColor(0xFF888888.toInt())
             textSize = 12f
         }
-
-        val pickBtn = Button(this).apply {
-            text = "사진 선택"
-            setOnClickListener { pickImage.launch("image/*") }
-        }
-
-        iconRow.addView(iconPreviewView)
-        val iconTextCol = LinearLayout(this).apply {
+        val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
-        iconTextCol.addView(iconHintView)
-        iconTextCol.addView(pickBtn)
-        iconRow.addView(iconTextCol)
-        layout.addView(iconRow)
+        col.addView(iconHintView)
+        col.addView(Button(this).apply { text = "사진 선택"; setOnClickListener { pickImage.launch("image/*") } })
+        row.addView(iconPreviewView)
+        row.addView(col)
+        layout.addView(row)
 
         AlertDialog.Builder(this)
             .setTitle("초기 설정")
-            .setMessage("설정 후 재설치 전까지 주소 변경 불가")
+            .setMessage("재설치 전까지 주소 변경 불가")
             .setView(layout)
             .setCancelable(false)
             .setPositiveButton("시작") { _, _ ->
                 val url = urlInput.text.toString().trim()
                 if (!url.startsWith("http://") && !url.startsWith("https://")) {
                     Toast.makeText(this, "https:// 로 시작하는 URL을 입력하세요", Toast.LENGTH_LONG).show()
-                    showSetupDialog(prefs)
-                    return@setPositiveButton
+                    showSetupDialog(prefs); return@setPositiveButton
                 }
-                // 아이콘 저장
                 pendingIconBitmap?.let { saveIcon(it) }
                 prefs.edit().putString(KEY_BASE_URL, url).apply()
                 lockedBaseUrl = url
                 startMusicService()
                 loadWebView(url)
-            }
-            .show()
-    }
-
-    private fun saveIcon(bmp: Bitmap) {
-        try {
-            val file = File(filesDir, ICON_FILE)
-            FileOutputStream(file).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        } catch (e: Exception) { /* ignore */ }
-    }
-
-    private fun loadSavedIcon(): Bitmap? {
-        return try {
-            val file = File(filesDir, ICON_FILE)
-            if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
-        } catch (e: Exception) { null }
-    }
-
-    private fun cropToSquare(bmp: Bitmap): Bitmap {
-        val size = minOf(bmp.width, bmp.height)
-        val x = (bmp.width - size) / 2
-        val y = (bmp.height - size) / 2
-        return Bitmap.createBitmap(bmp, x, y, size, size)
+            }.show()
     }
 
     private fun startMusicService() {
         try {
             val intent = Intent(this, MusicService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(intent)
-            } else {
-                startService(intent)
-            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent)
+            else startService(intent)
             bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
-        } catch (e: Exception) { /* 서비스 없어도 앱은 동작 */ }
+        } catch (e: Exception) {}
     }
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun loadWebView(url: String) {
-        CookieManager.getInstance().apply {
-            setAcceptCookie(true)
-        }
+        CookieManager.getInstance().setAcceptCookie(true)
 
         val wv = WebView(this)
         webView = wv
@@ -241,12 +237,11 @@ class MainActivity : AppCompatActivity() {
 
         CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
 
-        // JS → Android 미디어 정보 브릿지
         wv.addJavascriptInterface(object {
             @JavascriptInterface
-            fun onMediaUpdate(title: String, artist: String, isPlaying: Boolean) {
+            fun onMediaUpdate(title: String, artist: String, artworkUrl: String, isPlaying: Boolean) {
                 runOnUiThread {
-                    if (serviceBound) musicService?.updateMetadata(title, artist, isPlaying)
+                    if (serviceBound) musicService?.updateMetadata(title, artist, artworkUrl, isPlaying)
                 }
             }
         }, "AndroidBridge")
@@ -256,21 +251,51 @@ class MainActivity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView, pageUrl: String) {
                 view.evaluateJavascript("""
-                    (function(){
-                        var s=document.createElement('style');
-                        s.textContent='::-webkit-scrollbar{display:none!important}body{-webkit-tap-highlight-color:transparent}';
-                        document.head&&document.head.appendChild(s);
-                        function sendUpdate(p){
-                            try{var m=navigator.mediaSession&&navigator.mediaSession.metadata;
-                            AndroidBridge.onMediaUpdate(m?m.title:'',m?m.artist:'',p);}catch(e){}
-                        }
-                        function hook(el){if(el._h)return;el._h=true;
-                            el.addEventListener('play',function(){sendUpdate(true);});
-                            el.addEventListener('pause',function(){sendUpdate(false);});}
-                        document.querySelectorAll('audio,video').forEach(hook);
-                        new MutationObserver(function(){document.querySelectorAll('audio,video').forEach(hook);})
-                            .observe(document.body,{childList:true,subtree:true});
-                    })();
+                (function(){
+                    // 스타일
+                    var s=document.createElement('style');
+                    s.textContent='::-webkit-scrollbar{display:none!important}body{-webkit-tap-highlight-color:transparent}';
+                    document.head&&document.head.appendChild(s);
+
+                    // 미디어 정보 수집
+                    function sendMeta(playing){
+                        try{
+                            var ms=navigator.mediaSession;
+                            var m=ms&&ms.metadata;
+                            var title=m?m.title:'';
+                            var artist=m?(m.artist||m.album):'';
+                            var art='';
+                            if(m&&m.artwork&&m.artwork.length>0){
+                                art=m.artwork[m.artwork.length-1].src||m.artwork[0].src||'';
+                            }
+                            AndroidBridge.onMediaUpdate(title,artist,art,playing);
+                        }catch(e){}
+                    }
+
+                    // mediaSession metadata 변경 감지
+                    try{
+                        navigator.mediaSession.onmetadatachange=function(){sendMeta(true);};
+                        navigator.mediaSession.onplaybackstatechange=function(){
+                            sendMeta(navigator.mediaSession.playbackState==='playing');
+                        };
+                    }catch(e){}
+
+                    // audio/video 이벤트 감지
+                    function hookEl(el){
+                        if(el._mh)return;el._mh=true;
+                        el.addEventListener('play',function(){sendMeta(true);});
+                        el.addEventListener('pause',function(){sendMeta(false);});
+                        el.addEventListener('timeupdate',function(){
+                            if(!el._lastSent||Date.now()-el._lastSent>3000){
+                                el._lastSent=Date.now();sendMeta(!el.paused);
+                            }
+                        });
+                    }
+                    document.querySelectorAll('audio,video').forEach(hookEl);
+                    new MutationObserver(function(){
+                        document.querySelectorAll('audio,video').forEach(hookEl);
+                    }).observe(document.body||document.documentElement,{childList:true,subtree:true});
+                })();
                 """.trimIndent(), null)
             }
 
@@ -319,6 +344,19 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {}
     }
 
+    private fun saveIcon(bmp: Bitmap) {
+        try { FileOutputStream(File(filesDir, ICON_FILE)).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) } } catch (e: Exception) {}
+    }
+
+    private fun loadSavedIcon(): Bitmap? {
+        return try { val f = File(filesDir, ICON_FILE); if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null } catch (e: Exception) { null }
+    }
+
+    private fun cropSquare(bmp: Bitmap): Bitmap {
+        val s = minOf(bmp.width, bmp.height)
+        return Bitmap.createBitmap(bmp, (bmp.width - s) / 2, (bmp.height - s) / 2, s, s)
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             webView?.let { if (it.canGoBack()) { it.goBack(); return true } }
@@ -327,14 +365,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onResume() { super.onResume(); webView?.onResume(); hideSystemUI() }
-
-    override fun onPause() {
-        super.onPause()
-        webView?.onPause()
-        CookieManager.getInstance().flush()
-    }
+    override fun onPause() { super.onPause(); webView?.onPause(); CookieManager.getInstance().flush() }
 
     override fun onDestroy() {
+        try { unregisterReceiver(mediaReceiver) } catch (e: Exception) {}
         if (serviceBound) unbindService(serviceConnection)
         webView?.destroy()
         super.onDestroy()
