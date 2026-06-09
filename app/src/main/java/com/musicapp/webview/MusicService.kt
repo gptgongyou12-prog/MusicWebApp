@@ -113,7 +113,18 @@ class MusicService : Service() {
         mediaSession.setPlaybackState(buildPlaybackState(playing))
     }
 
-    fun updateMetadata(title: String, artist: String, artworkUrl: String, playing: Boolean) {
+    fun updateMetadataWithBase64Art(title: String, artist: String, artBase64: String, playing: Boolean) {
+        try {
+            val pureBase64 = artBase64.substringAfter("base64,")
+            val bytes = android.util.Base64.decode(pureBase64, android.util.Base64.DEFAULT)
+            val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            updateMetadata(title, artist, "", playing, bmp)
+        } catch (e: Exception) {
+            updateMetadata(title, artist, "", playing)
+        }
+    }
+
+    fun updateMetadata(title: String, artist: String, artworkUrl: String, playing: Boolean, preloadedArt: Bitmap? = null) {
         isPlaying = playing
         updatePlaybackState(playing)
 
@@ -121,22 +132,31 @@ class MusicService : Service() {
             .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title.ifEmpty { "재생 중" })
             .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist)
 
-        // 앨범아트 비동기 로드
-        if (artworkUrl.isNotEmpty()) {
+        if (preloadedArt != null) {
+            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, preloadedArt)
+            mediaSession.setMetadata(metaBuilder.build())
+            notificationManager.notify(NOTIFICATION_ID, buildNotification(title, artist, "", playing, preloadedArt))
+        } else if (artworkUrl.isNotEmpty()) {
+            // 먼저 텍스트만 업데이트
+            mediaSession.setMetadata(metaBuilder.build())
+            notificationManager.notify(NOTIFICATION_ID, buildNotification(title, artist, "", playing))
+            // 앨범아트 비동기 로드
             Thread {
                 try {
-                    val bmp = BitmapFactory.decodeStream(URL(artworkUrl).openStream())
+                    val conn = URL(artworkUrl).openConnection()
+                    conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+                    val bmp = BitmapFactory.decodeStream(conn.getInputStream())
                     bmp?.let {
                         metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it)
                         mediaSession.setMetadata(metaBuilder.build())
-                        notificationManager.notify(NOTIFICATION_ID, buildNotification(title, artist, artworkUrl, playing, it))
+                        notificationManager.notify(NOTIFICATION_ID, buildNotification(title, artist, "", playing, it))
                     }
-                } catch (e: Exception) { /* 앨범아트 로드 실패시 무시 */ }
+                } catch (e: Exception) {}
             }.start()
+        } else {
+            mediaSession.setMetadata(metaBuilder.build())
+            notificationManager.notify(NOTIFICATION_ID, buildNotification(title, artist, "", playing))
         }
-
-        mediaSession.setMetadata(metaBuilder.build())
-        notificationManager.notify(NOTIFICATION_ID, buildNotification(title, artist, artworkUrl, playing))
     }
 
     private fun buildNotification(

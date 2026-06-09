@@ -244,6 +244,12 @@ class MainActivity : AppCompatActivity() {
                     if (serviceBound) musicService?.updateMetadata(title, artist, artworkUrl, isPlaying)
                 }
             }
+            @JavascriptInterface
+            fun onMediaUpdateWithArt(title: String, artist: String, artBase64: String, isPlaying: Boolean) {
+                runOnUiThread {
+                    if (serviceBound) musicService?.updateMetadataWithBase64Art(title, artist, artBase64, isPlaying)
+                }
+            }
         }, "AndroidBridge")
 
         wv.webViewClient = object : WebViewClient() {
@@ -252,49 +258,71 @@ class MainActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView, pageUrl: String) {
                 view.evaluateJavascript("""
                 (function(){
+                    if(window._musicBridgeInit)return;
+                    window._musicBridgeInit=true;
+
                     // 스타일
                     var s=document.createElement('style');
                     s.textContent='::-webkit-scrollbar{display:none!important}body{-webkit-tap-highlight-color:transparent}';
                     document.head&&document.head.appendChild(s);
 
-                    // 미디어 정보 수집
+                    var _lastTitle='',_lastArt='',_lastPlaying=false;
+
+                    function blobToBase64(url,cb){
+                        try{
+                            var xhr=new XMLHttpRequest();
+                            xhr.open('GET',url,true);
+                            xhr.responseType='blob';
+                            xhr.onload=function(){
+                                var reader=new FileReader();
+                                reader.onloadend=function(){cb(reader.result||'');};
+                                reader.readAsDataURL(xhr.response);
+                            };
+                            xhr.onerror=function(){cb('');};
+                            xhr.send();
+                        }catch(e){cb('');}
+                    }
+
                     function sendMeta(playing){
                         try{
                             var ms=navigator.mediaSession;
                             var m=ms&&ms.metadata;
-                            var title=m?m.title:'';
-                            var artist=m?(m.artist||m.album):'';
+                            var title=m&&m.title?m.title:(document.title||'');
+                            var artist=m?(m.artist||m.album||''):'';
                             var art='';
                             if(m&&m.artwork&&m.artwork.length>0){
                                 art=m.artwork[m.artwork.length-1].src||m.artwork[0].src||'';
                             }
-                            AndroidBridge.onMediaUpdate(title,artist,art,playing);
+                            var changed=(title!==_lastTitle||art!==_lastArt||playing!==_lastPlaying);
+                            if(!changed)return;
+                            _lastTitle=title;_lastArt=art;_lastPlaying=playing;
+
+                            if(art&&art.startsWith('blob:')){
+                                blobToBase64(art,function(b64){
+                                    try{AndroidBridge.onMediaUpdateWithArt(title,artist,b64,playing);}catch(e){}
+                                });
+                            } else {
+                                try{AndroidBridge.onMediaUpdate(title,artist,art,playing);}catch(e){}
+                            }
                         }catch(e){}
                     }
 
-                    // mediaSession metadata 변경 감지
-                    try{
-                        navigator.mediaSession.onmetadatachange=function(){sendMeta(true);};
-                        navigator.mediaSession.onplaybackstatechange=function(){
-                            sendMeta(navigator.mediaSession.playbackState==='playing');
-                        };
-                    }catch(e){}
-
-                    // audio/video 이벤트 감지
+                    // audio/video 이벤트 훅
                     function hookEl(el){
                         if(el._mh)return;el._mh=true;
                         el.addEventListener('play',function(){sendMeta(true);});
                         el.addEventListener('pause',function(){sendMeta(false);});
-                        el.addEventListener('timeupdate',function(){
-                            if(!el._lastSent||Date.now()-el._lastSent>3000){
-                                el._lastSent=Date.now();sendMeta(!el.paused);
-                            }
-                        });
                     }
                     document.querySelectorAll('audio,video').forEach(hookEl);
                     new MutationObserver(function(){
                         document.querySelectorAll('audio,video').forEach(hookEl);
                     }).observe(document.body||document.documentElement,{childList:true,subtree:true});
+
+                    // 2초마다 폴링 (mediaSession 늦게 세팅되는 사이트 대응)
+                    setInterval(function(){
+                        var el=document.querySelector('audio')||document.querySelector('video');
+                        sendMeta(el?!el.paused:_lastPlaying);
+                    },2000);
                 })();
                 """.trimIndent(), null)
             }
