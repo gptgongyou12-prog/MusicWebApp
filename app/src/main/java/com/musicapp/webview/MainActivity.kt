@@ -111,12 +111,30 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onPageFinished(view: WebView, url: String) {
-                // 스크롤바 숨김, 텍스트 선택 방지
                 view.evaluateJavascript(
                     "(function(){var s=document.createElement('style');" +
                     "s.textContent='::-webkit-scrollbar{display:none!important}" +
                     "body{-webkit-tap-highlight-color:transparent}';" +
                     "document.head&&document.head.appendChild(s);})()", null)
+            }
+
+            override fun onReceivedSslError(view: WebView, handler: android.webkit.SslErrorHandler, error: android.net.http.SslError) {
+                handler.proceed() // SSL 인증서 오류 무시
+            }
+
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                if (request.isForMainFrame) {
+                    view.loadData("""
+                        <html><body style="background:#111;color:#aaa;font-family:sans-serif;
+                        display:flex;align-items:center;justify-content:center;height:100vh;
+                        margin:0;flex-direction:column;text-align:center;">
+                        <p style="font-size:18px;">페이지를 불러올 수 없습니다</p>
+                        <p style="font-size:13px;opacity:.6;margin:8px 24px;">네트워크를 확인하거나 주소가 올바른지 확인하세요</p>
+                        <button onclick="location.reload()" style="margin-top:20px;padding:12px 28px;
+                        background:#7c6aff;color:#fff;border:none;border-radius:10px;font-size:15px;">
+                        다시 시도</button></body></html>
+                    """.trimIndent(), "text/html", "UTF-8")
+                }
             }
         }
 
